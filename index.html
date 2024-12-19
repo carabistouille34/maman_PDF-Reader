@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PDF Music Scroller</title>
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <script src="https://docs.opencv.org/4.5.4/opencv.js"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+        
+        .screen {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            transition: transform 0.5s;
+        }
+
+        #inputScreen {
+            background: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        #displayScreen {
+            background: #fff;
+            overflow-x: scroll;
+            display: none;
+            scroll-behavior: smooth;
+        }
+
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            display: flex;
+            gap: 10px;
+            color: white;
+            z-index: 100;
+            align-items: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+
+        #scrollContainer {
+            white-space: nowrap;
+            transition: transform 0.1s linear;
+        }
+
+        canvas {
+            display: inline-block;
+            vertical-align: top;
+        }
+
+        #tempCanvas {
+            display: none;
+        }
+
+        .processing-indicator {
+            display: none;
+            padding: 10px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 5px;
+            margin: 10px;
+        }
+
+        .log-output {
+            max-height: 150px;
+            overflow-y: auto;
+            width: 80%;
+            background: #f8f8f8;
+            padding: 10px;
+            border: 1px solid #ddd;
+            margin: 10px;
+            font-family: monospace;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div id="inputScreen" class="screen">
+        <h2>PDF Music Scroller</h2>
+        <input type="file" id="pdfInput" accept=".pdf">
+        <button onclick="processAndDisplay()">Convert & Display</button>
+        <div id="processingIndicator" class="processing-indicator">Processing...</div>
+        <div id="logOutput" class="log-output"></div>
+    </div>
+
+    <div id="displayScreen" class="screen">
+        <div id="scrollContainer"></div>
+        <div class="controls">
+            <button onclick="backToInput()">Back</button>
+            <button onclick="resetScroll()">Reset</button>
+            <button onclick="togglePlay()" id="playPauseBtn">Play</button>
+            <div class="speed-control">
+                <label>Speed:</label>
+                <input type="range" id="speedControl" min="0" max="200" value="100" step="1">
+                <span id="speedValue">1.0x</span>
+            </div>
+        </div>
+    </div>
+    <canvas id="tempCanvas"></canvas>
+
+    <script>
+        let isPlaying = false;
+        let scrollInterval;
+        let startTime;
+        let pauseOffset = 0;
+        let lastScrollPosition = 0;
+        let scrollSpeed = 1;
+        let logMessages = [];
+
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            logMessages.push(`[${timestamp}] ${message}`);
+            const logOutput = document.getElementById('logOutput');
+            logOutput.innerHTML = logMessages.join('<br>');
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        async function detectStaves(canvas) {
+            log('Starting stave detection...');
+            return new Promise((resolve) => {
+                const src = cv.imread(canvas);
+                const gray = new cv.Mat();
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                
+                const binary = new cv.Mat();
+                cv.threshold(gray, binary, 200, 255, cv.THRESH_BINARY);
+                
+                const rows = binary.rows;
+                const cols = binary.cols;
+                const stavePositions = [];
+                let whiteLineCount = 0;
+                
+                for (let y = 0; y < rows; y++) {
+                    let isWhiteLine = true;
+                    for (let x = 0; x < cols; x++) {
+                        if (binary.ucharPtr(y, x)[0] !== 255) {
+                            isWhiteLine = false;
+                            break;
+                        }
+                    }
+                    
+                    if (isWhiteLine) {
+                        whiteLineCount++;
+                    } else {
+                        if (whiteLineCount > 20) {
+                            stavePositions.push(y - Math.floor(whiteLineCount/2));
+                        }
+                        whiteLineCount = 0;
+                    }
+                }
+                
+                if (whiteLineCount > 20) {
+                    stavePositions.push(rows - Math.floor(whiteLineCount/2));
+                }
+                
+                src.delete();
+                gray.delete();
+                binary.delete();
+                
+                log(`Detected ${stavePositions.length} stave positions`);
+                resolve(stavePositions);
+            });
+        }
+
+        async function processAndDisplay() {
+            const processingIndicator = document.getElementById('processingIndicator');
+            processingIndicator.style.display = 'block';
+            logMessages = [];
+            
+            try {
+                log('Starting PDF processing...');
+                const pdfFile = document.getElementById('pdfInput').files[0];
+                
+                if (!pdfFile) {
+                    alert('Please select a PDF');
+                    return;
+                }
+
+                const arrayBuffer = await pdfFile.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                const container = document.getElementById('scrollContainer');
+                container.innerHTML = '';
+
+                let totalHeight = 0;
+                let maxWidth = 0;
+                const staveImages = [];
+
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    log(`Processing page ${i}/${pdf.numPages}`);
+                    const page = await pdf.getPage(i);
+                    const viewport = page.getViewport({scale: 1.5});
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    maxWidth = Math.max(maxWidth, canvas.width);
+
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport
+                    }).promise;
+
+                    const stavePositions = await detectStaves(canvas);
+                    
+                    let prevPos = 0;
+                    for (let pos of stavePositions) {
+                        if (pos - prevPos > 50) {
+                            const staveCanvas = document.createElement('canvas');
+                            staveCanvas.width = canvas.width;
+                            staveCanvas.height = pos - prevPos;
+                            const staveCtx = staveCanvas.getContext('2d');
+                            staveCtx.drawImage(canvas, 
+                                0, prevPos, canvas.width, pos - prevPos,
+                                0, 0, canvas.width, pos - prevPos
+                            );
+                            staveImages.push(staveCanvas);
+                            totalHeight = Math.max(totalHeight, pos - prevPos);
+                        }
+                        prevPos = pos;
+                    }
+                }
+
+                log(`Creating final image with ${staveImages.length} staves`);
+                
+                const finalCanvas = document.createElement('canvas');
+                finalCanvas.height = totalHeight;
+                finalCanvas.width = maxWidth * staveImages.length;
+                const finalCtx = finalCanvas.getContext('2d');
+
+                staveImages.forEach((staveCanvas, index) => {
+                    finalCtx.drawImage(staveCanvas, 
+                        maxWidth * index, 0, staveCanvas.width, staveCanvas.height
+                    );
+                });
+
+                container.appendChild(finalCanvas);
+
+                document.getElementById('inputScreen').style.display = 'none';
+                document.getElementById('displayScreen').style.display = 'block';
+                
+                const displayScreen = document.getElementById('displayScreen');
+                displayScreen.scrollLeft = 0;
+
+                log('Processing completed successfully');
+            } catch (error) {
+                log(`Error: ${error.message}`);
+                alert('An error occurred during processing');
+            } finally {
+                processingIndicator.style.display = 'none';
+            }
+        }
+
+        document.getElementById('speedControl').addEventListener('input', function(e) {
+            scrollSpeed = e.target.value / 100;
+            document.getElementById('speedValue').textContent = `${scrollSpeed.toFixed(1)}x`;
+        });
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            const btn = document.getElementById('playPauseBtn');
+            if (isPlaying) {
+                startScroll();
+                btn.textContent = 'Pause';
+            } else {
+                stopScroll();
+                btn.textContent = 'Play';
+            }
+        }
+
+        function startScroll() {
+            const container = document.getElementById('displayScreen');
+            const totalScroll = container.scrollWidth - container.clientWidth;
+            
+            scrollInterval = setInterval(() => {
+                container.scrollLeft += scrollSpeed;
+                if (container.scrollLeft >= totalScroll) {
+                    stopScroll();
+                }
+            }, 16);
+        }
+
+        function stopScroll() {
+            isPlaying = false;
+            clearInterval(scrollInterval);
+            document.getElementById('playPauseBtn').textContent = 'Play';
+        }
+
+        function resetScroll() {
+            const container = document.getElementById('displayScreen');
+            container.scrollLeft = 0;
+            stopScroll();
+        }
+
+        function backToInput() {
+            stopScroll();
+            document.getElementById('displayScreen').style.display = 'none';
+            document.getElementById('inputScreen').style.display = 'flex';
+        }
+    </script>
+</body>
+</html>
