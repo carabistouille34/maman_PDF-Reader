@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PDF Music Scroller</title>
+    <title>Maman adorée - lecteur de PDF</title>
     <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
     <script src="https://docs.opencv.org/4.5.4/opencv.js"></script>
@@ -98,9 +98,9 @@
 </head>
 <body>
     <div id="inputScreen" class="screen">
-        <h2>PDF Music Scroller</h2>
+        <h2>Maman adorée - lecteur de PDF</h2>
         <input type="file" id="pdfInput" accept=".pdf">
-        <button onclick="processAndDisplay()">Convert & Display</button>
+        <button onclick="processAndDisplay()">Commencer</button>
         <div id="processingIndicator" class="processing-indicator">Processing...</div>
         <div id="logOutput" class="log-output"></div>
     </div>
@@ -108,12 +108,12 @@
     <div id="displayScreen" class="screen">
         <div id="scrollContainer"></div>
         <div class="controls">
-            <button onclick="backToInput()">Back</button>
-            <button onclick="resetScroll()">Reset</button>
-            <button onclick="togglePlay()" id="playPauseBtn">Play</button>
+            <button onclick="backToInput()">Ecran principal</button>
+            <button onclick="resetScroll()">Retour</button>
+            <button onclick="togglePlay()" id="playPauseBtn">Jouer</button>
             <div class="speed-control">
-                <label>Speed:</label>
-                <input type="range" id="speedControl" min="0" max="200" value="100" step="1">
+                <label>Vitesse:</label>
+                <input type="range" id="speedControl" min="0" max="1000" value="100" step="1">
                 <span id="speedValue">1.0x</span>
             </div>
         </div>
@@ -194,7 +194,7 @@
                 const pdfFile = document.getElementById('pdfInput').files[0];
                 
                 if (!pdfFile) {
-                    alert('Please select a PDF');
+                    alert('Choisis un PDF');
                     return;
                 }
 
@@ -273,7 +273,7 @@
         }
 
         document.getElementById('speedControl').addEventListener('input', function(e) {
-            scrollSpeed = e.target.value / 100;
+            scrollSpeed = e.target.value / 50;
             document.getElementById('speedValue').textContent = `${scrollSpeed.toFixed(1)}x`;
         });
 
